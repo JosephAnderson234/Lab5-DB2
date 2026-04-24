@@ -1,7 +1,7 @@
 import struct
 import os
 
-EMPLOYEE_FORMAT = 'i10s15s15s1s10s'
+EMPLOYEE_FORMAT = 'i10s10s12s1s10s'
 DEPARTMENT_FORMAT = 'i4s10s10s'
 PAGE_SIZE = 4096
 
