@@ -4,6 +4,7 @@ import math
 
 EMPLOYEE_FORMAT = '=i10s20s20s1s10s' 
 DEPARTMENT_FORMAT = '=i4s10s10s'
+DEPARTMENT_EMPLOYEE_FORMAT = '=i4s10s10s'
 PAGE_SIZE = 4096
 
 def parse_employee(line: str):
@@ -11,7 +12,7 @@ def parse_employee(line: str):
     return (int(parts[0]), parts[1].encode(), parts[2].encode(), 
             parts[3].encode(), parts[4].encode(), parts[5].encode())
 
-def parse_department(line: str):
+def parse_department_employee(line: str):
     parts = line.strip().split(';')
     return (int(parts[0]), parts[1].encode(), parts[2].encode(), parts[3].encode())
 
@@ -36,8 +37,8 @@ def export_to_heap(csv_path: str, heap_path: str, record_format: str, page_size:
             # Se parsea el CSV según el formato indicado
             if record_format == EMPLOYEE_FORMAT:
                 record = parse_employee(line)
-            elif record_format == DEPARTMENT_FORMAT:
-                record = parse_department(line)
+            else:
+                record = parse_department_employee(line)
             buffer.append(record)
             
             if len(buffer) == records_per_page:
@@ -58,15 +59,19 @@ def read_page(heap_path: str, page_id: int, page_size: int, record_format: str) 
         records = []
         for i in range(0, page_size, record_size):
             chunk = page_data[i : i + record_size]
-            # Si el registro empieza con un byte nulo (o es todo nulo), es padding
-            if chunk[0] == 0: 
+            # Verificar que tenemos suficientes bytes
+            if len(chunk) < record_size:
+                break
+            # Verificar si el registro es padding (todos los bytes son 0)
+            if chunk == b'\x00' * record_size:
                 break
             records.append(struct.unpack(record_format, chunk))
     return records
 
 # Escribe una lista de registros en la página indicada
 def write_page(heap_path: str, page_id: int, records: list[tuple], record_format: str, page_size: int):
-    with open(heap_path, 'a+b') as f:
+    mode = 'r+b' if os.path.exists(heap_path) else 'w+b'
+    with open(heap_path, mode) as f:
         f.seek(page_id * page_size)
         write_page_data(f, records, record_format, page_size)
 
@@ -77,15 +82,15 @@ def count_pages(heap_path: str, page_size: int) -> int:
 
 
 if __name__ == "__main__":
-    export_to_heap('employee.csv', 'employees.bin', EMPLOYEE_FORMAT, PAGE_SIZE)
-    export_to_heap('department_employee.csv', 'department_employee.bin', DEPARTMENT_FORMAT, PAGE_SIZE)
+    export_to_heap('employees.csv', 'employees.bin', EMPLOYEE_FORMAT, PAGE_SIZE)
+    export_to_heap('department_employees.csv', 'department_employees.bin', DEPARTMENT_FORMAT, PAGE_SIZE)
     print(f"Total páginas empleados: {count_pages('employees.bin', PAGE_SIZE)}")
-    print(f"Total páginas departamentos: {count_pages('department_employee.bin', PAGE_SIZE)}")
-    records = read_page('employees.bin', 0, PAGE_SIZE, EMPLOYEE_FORMAT)
+    print(f"Total páginas departamentos: {count_pages('department_employees.bin', PAGE_SIZE)}")
+    records = read_page('department_employees.bin', 0, PAGE_SIZE, DEPARTMENT_EMPLOYEE_FORMAT)
     print("Registros en la primera página de empleados:")
     for rec in records:
         print(rec)
-    records = read_page('department_employee.bin', 0, PAGE_SIZE, DEPARTMENT_FORMAT)
+    records = read_page('department_employees.bin', 0, PAGE_SIZE, DEPARTMENT_FORMAT)
     print("Registros en la primera página de departamentos:")
     for rec in records:
         print(rec)

@@ -40,65 +40,68 @@ def generate_runs(heap_path, page_size, buffer_size, sort_key_idx):
             pages_written += 1
             
     return run_paths, pages_read, pages_written
+
 def multiway_merge(run_paths, output_path, page_size, buffer_size, sort_key_idx):
-    """Fase 2: Multiway Merge usando Min-Heap robusto contra errores de unpack [cite: 86]"""
-    # Abrir todos los runs generados en la Fase 1
-    run_files = [open(path, 'rb') for path in run_paths]
+    B = buffer_size // page_size
+    num_records_per_page = page_size // RECORD_SIZE
+    
+    # Buffer de página por run: {run_idx: [records], cursor}
+    run_buffers = {}
+    run_page_ids = {}
+    pages_read = 0
+    pages_written = 0
+    
+    for i, path in enumerate(run_paths):
+        run_page_ids[i] = 0
+        run_buffers[i] = read_page(path, 0, page_size, RECORD_FORMAT)
+        if run_buffers[i]:
+            pages_read += 1 
+
+    min_heap = []
+    for i in range(len(run_paths)):
+        if run_buffers[i]:
+            record = run_buffers[i].pop(0)
+            heapq.heappush(min_heap, (record[sort_key_idx], record, i))
+    
+    output_buffer = []
     output_f = open(output_path, 'wb')
     
-    min_heap = []
-    # Cargar el primer registro válido de cada run al heap 
-    for i, f in enumerate(run_files):
-        data = f.read(RECORD_SIZE)
-        # Verificamos que se lean exactamente los bytes del registro 
-        if data and len(data) == RECORD_SIZE:
-            try:
-                record = struct.unpack(RECORD_FORMAT, data)
-                if record[0] != 0:
-                    heapq.heappush(min_heap, (record[sort_key_idx], record, i))
-            except struct.error:
-                continue 
-
-    output_buffer = []
-    num_records_per_page = page_size // RECORD_SIZE
-    pages_read = len(run_paths) 
-    pages_written = 0
-
     while min_heap:
         val, record, run_idx = heapq.heappop(min_heap)
         output_buffer.append(record)
-        # Cuando el buffer de salida se llena, escribirlo a disco
+        
         if len(output_buffer) == num_records_per_page:
             for r in output_buffer:
                 output_f.write(struct.pack(RECORD_FORMAT, *r))
             pages_written += 1
             output_buffer = []
-
-        # Leer el siguiente registro del mismo run 
-        data = run_files[run_idx].read(RECORD_SIZE)
-        if data and len(data) == RECORD_SIZE:
-            try:
-                next_record = struct.unpack(RECORD_FORMAT, data)
-                # Validar que no sea un registro vacío
-                if next_record[0] != 0:
-                    heapq.heappush(min_heap, (next_record[sort_key_idx], next_record, run_idx))
-            except struct.error:
-                pass # Fin del contenido útil en este run
-
-    # Escribir registros restantes y completar la página con padding 
+        
+        # Si el buffer del run se agotó, cargar siguiente página
+        if not run_buffers[run_idx]:
+            run_page_ids[run_idx] += 1
+            next_page = read_page(run_paths[run_idx], run_page_ids[run_idx], page_size, RECORD_FORMAT)
+            run_buffers[run_idx] = next_page
+            if next_page:
+                pages_read += 1
+        
+        if run_buffers[run_idx]:
+            next_record = run_buffers[run_idx].pop(0)
+            heapq.heappush(min_heap, (next_record[sort_key_idx], next_record, run_idx))
+    
     if output_buffer:
         for r in output_buffer:
             output_f.write(struct.pack(RECORD_FORMAT, *r))
         padding = page_size - (len(output_buffer) * RECORD_SIZE)
-        output_f.write(b'\0' * padding)
+        output_f.write(b'\x00' * padding)
         pages_written += 1
-
-    for f in run_files: f.close()
+    
     output_f.close()
     for path in run_paths:
-        if os.path.exists(path): os.remove(path)
+        if os.path.exists(path):
+            os.remove(path)
     
     return pages_read, pages_written
+    
 
 def external_sort(heap_path, output_path, page_size, buffer_size, sort_key_idx):
     """Ejecuta TPMMS y retorna métricas de rendimiento"""
@@ -128,9 +131,9 @@ if __name__ == '__main__':
     PAGE_SIZE = 4096 
     BUFFER_SIZE = 64 * 1024 
     
-    CSV_FILE = 'employee.csv' 
-    HEAP_FILE = 'employee.bin'
-    OUTPUT_FILE = 'sorted_employee.bin'
+    CSV_FILE = 'employees.csv' 
+    HEAP_FILE = 'employees.bin'
+    OUTPUT_FILE = 'sorted_employees.bin'
 
     if not os.path.exists(CSV_FILE):
         print(f"Error: No se encuentra {CSV_FILE}. Verifica el nombre del archivo.")
