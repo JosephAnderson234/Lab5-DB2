@@ -66,7 +66,7 @@ def read_page(heap_path: str, page_id: int, page_size: int, record_format: str) 
 
 # Escribe una lista de registros en la página indicada
 def write_page(heap_path: str, page_id: int, records: list[tuple], record_format: str, page_size: int):
-    with open(heap_path, 'r+b') as f:
+    with open(heap_path, 'a+b') as f:
         f.seek(page_id * page_size)
         write_page_data(f, records, record_format, page_size)
 

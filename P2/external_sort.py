@@ -4,9 +4,7 @@ import heapq
 import time
 import struct
 import csv
-
 from heap_file import read_page, write_page, count_pages, export_to_heap
-
 
 RECORD_FORMAT = '=i10s20s20s1s10s' 
 RECORD_SIZE = struct.calcsize(RECORD_FORMAT)
