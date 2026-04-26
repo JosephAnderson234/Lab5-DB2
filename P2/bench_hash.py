@@ -25,5 +25,5 @@ for kb in buffers:
     io_total = stats['pages_read'] + stats['pages_written']
     
     print(f"{kb:>3} KB      | {b_pages:>8} | {stats['partitions_created']:>7} | "
-          f"{stats['time_phase1_sec']:>10.4f} | {stats['time_phase2_sec']:>10.4f} | "
-          f"{stats['time_total_sec']:>10.4f} | {io_total:>9}")
+        f"{stats['time_phase1_sec']:>10.4f} | {stats['time_phase2_sec']:>10.4f} | "
+        f"{stats['time_total_sec']:>10.4f} | {io_total:>9}")
