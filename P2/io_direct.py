@@ -43,7 +43,7 @@ def direct_read_page(path: str, page_id: int, page_size: int) -> bytes:
     aligned_buf, _anchor = _alloc_aligned(page_size)
 
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_DIRECT)
+        fd = os.open(path, os.O_RDONLY)
         try:
             os.lseek(fd, offset, os.SEEK_SET)
             data = os.read(fd, page_size)
@@ -78,7 +78,7 @@ def direct_write_page(path: str, page_id: int, data: bytes, page_size: int):
     aligned_buf, _anchor = _alloc_aligned(page_size)
     ctypes.memmove(aligned_buf, data, page_size)
 
-    flags = os.O_WRONLY | os.O_CREAT | os.O_DIRECT
+    flags = os.O_WRONLY | os.O_CREAT
     try:
         fd = os.open(path, flags, 0o644)
         try:
