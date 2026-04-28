@@ -4,7 +4,6 @@ import time
 import math
 import hashlib
 from heap_file import read_page, write_page, count_pages, PAGE_SIZE, write_page_data, DEPARTMENT_EMPLOYEE_FORMAT
-from io_direct import drop_cache_all
 
 DEPT_EMP_FORMAT = DEPARTMENT_EMPLOYEE_FORMAT
 RECORD_SIZE = struct.calcsize(DEPT_EMP_FORMAT)
@@ -48,9 +47,6 @@ def partition_data(heap_path: str, page_size: int, buffer_size: int, group_key: 
     pages_read = 0
     pages_written = 0
 
-    # Purgar cache para forzar I/O real en la Fase 1
-    drop_cache_all(heap_path)
-
     for page_id in range(total_pages):
         records = read_page(heap_path, page_id, page_size, DEPT_EMP_FORMAT)
         pages_read += 1
@@ -92,9 +88,6 @@ def aggregate_partitions(partition_paths: list[str], page_size: int, buffer_size
     aggregated_result = {}
     # --- Bug 1 Fix: contar páginas leídas en la Fase 2 ---
     pages_read = 0
-
-    # Purgar cache de las particiones antes de leerlas
-    drop_cache_all(*partition_paths)
 
     for partition_path in partition_paths:
         if not os.path.exists(partition_path) or os.path.getsize(partition_path) == 0:

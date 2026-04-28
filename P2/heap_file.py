@@ -1,7 +1,32 @@
 import struct
 import os
 import math
-from io_direct import direct_read_page, direct_write_page, drop_cache_all
+
+def direct_read_page(path: str, page_id: int, page_size: int) -> bytes:
+    """Lee una página del archivo. Retorna exactamente page_size bytes."""
+    offset = page_id * page_size
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.lseek(fd, offset, os.SEEK_SET)
+            data = os.read(fd, page_size)
+            return data.ljust(page_size, b'\x00')
+        finally:
+            os.close(fd)
+    except OSError:
+        return b'\x00' * page_size
+
+
+def direct_write_page(path: str, page_id: int, data: bytes, page_size: int):
+    """Escribe una página en el archivo."""
+    data = data.ljust(page_size, b'\x00')[:page_size]
+    offset = page_id * page_size
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o644)
+    try:
+        os.lseek(fd, offset, os.SEEK_SET)
+        os.write(fd, data)
+    finally:
+        os.close(fd)
 
 EMPLOYEE_FORMAT = '=i10s20s20s1s10s'
 DEPARTMENT_EMPLOYEE_FORMAT = '=i4s10s10s'

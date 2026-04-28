@@ -4,22 +4,18 @@ import heapq
 import time
 import struct
 from heap_file import read_page, write_page, count_pages, export_to_heap, pack_page
-from io_direct import direct_write_page, drop_cache_all
 
 RECORD_FORMAT = '=i10s20s20s1s10s'
 RECORD_SIZE = struct.calcsize(RECORD_FORMAT)
 
 
 def generate_runs(heap_path, page_size, buffer_size, sort_key_idx):
-    """Fase 1: Generación de runs ordenados"""
+    """Fase 1: Generación de runs ordenados usando B páginas de buffer."""
     B = buffer_size // page_size
     total_pages = count_pages(heap_path, page_size)
     run_paths = []
     pages_read = 0
     pages_written = 0
-
-    # Purgar cache antes de leer para forzar I/O real
-    drop_cache_all(heap_path)
 
     for i in range(0, total_pages, B):
         temp_buffer = []
@@ -32,13 +28,11 @@ def generate_runs(heap_path, page_size, buffer_size, sort_key_idx):
         temp_buffer.sort(key=lambda x: x[sort_key_idx])
 
         run_path = f"run_{len(run_paths)}.bin"
-        # Borrar run previo si existe
         if os.path.exists(run_path):
             os.remove(run_path)
         run_paths.append(run_path)
 
         num_records_per_page = page_size // RECORD_SIZE
-        # --- Bug 2 Fix: usar write_page para generar heap file válido ---
         for p_id in range(math.ceil(len(temp_buffer) / num_records_per_page)):
             start = p_id * num_records_per_page
             end = start + num_records_per_page
@@ -48,23 +42,25 @@ def generate_runs(heap_path, page_size, buffer_size, sort_key_idx):
     return run_paths, pages_read, pages_written
 
 
-def multiway_merge(run_paths, output_path, page_size, buffer_size, sort_key_idx):
-    """Fase 2: Multiway merge con heapq. Usa B-1 buffers de entrada y 1 de salida."""
+def _merge_runs(run_paths, output_path, page_size, sort_key_idx):
+    """
+    Merge de un lote de runs hacia output_path.
+    Asume que len(run_paths) <= B-1 (caben en buffer).
+    Retorna (pages_read, pages_written).
+    """
     num_records_per_page = page_size // RECORD_SIZE
     pages_read = 0
     pages_written = 0
 
-    # Purgar cache de los runs antes de mergear
-    drop_cache_all(*run_paths)
-
-    # Inicializar un buffer de página por run
+    # Un buffer de entrada (1 página) por cada run del lote
     run_buffers = {}
     run_page_ids = {}
 
     for i, path in enumerate(run_paths):
         run_page_ids[i] = 0
-        run_buffers[i] = read_page(path, 0, page_size, RECORD_FORMAT)
-        if run_buffers[i]:
+        page = read_page(path, 0, page_size, RECORD_FORMAT)
+        run_buffers[i] = page
+        if page:
             pages_read += 1
 
     # Inicializar min-heap con el primer registro de cada run
@@ -74,7 +70,6 @@ def multiway_merge(run_paths, output_path, page_size, buffer_size, sort_key_idx)
             record = run_buffers[i].pop(0)
             heapq.heappush(min_heap, (record[sort_key_idx], record, i))
 
-    # Borrar output previo para escritura limpia
     if os.path.exists(output_path):
         os.remove(output_path)
 
@@ -87,7 +82,6 @@ def multiway_merge(run_paths, output_path, page_size, buffer_size, sort_key_idx)
 
         # Flush del buffer de salida cuando se llena (1 página)
         if len(output_buffer) == num_records_per_page:
-            # Bug 2 Fix: usar write_page para output válido como heap file
             write_page(output_path, output_page_id, output_buffer, RECORD_FORMAT, page_size)
             output_page_id += 1
             pages_written += 1
@@ -105,15 +99,67 @@ def multiway_merge(run_paths, output_path, page_size, buffer_size, sort_key_idx)
             next_record = run_buffers[run_idx].pop(0)
             heapq.heappush(min_heap, (next_record[sort_key_idx], next_record, run_idx))
 
-    # Bug 2 Fix: escribir último bloque con write_page (agrega padding correcto)
+    # Escribir registros restantes en el buffer de salida
     if output_buffer:
         write_page(output_path, output_page_id, output_buffer, RECORD_FORMAT, page_size)
         pages_written += 1
 
-    # Limpiar runs temporales
-    for path in run_paths:
-        if os.path.exists(path):
-            os.remove(path)
+    return pages_read, pages_written
+
+
+def multiway_merge(run_paths, output_path, page_size, buffer_size, sort_key_idx):
+    """
+    Fase 2: Multiway merge respetando el límite de B-1 buffers de entrada.
+    Si hay más runs que B-1, hace pasadas intermedias en lotes hasta
+    reducir el número de runs a un nivel que quepa en una sola pasada final.
+    """
+    B = buffer_size // page_size
+    max_streams = B - 1   # B-1 buffers de entrada, 1 buffer de salida
+    pages_read = 0
+    pages_written = 0
+
+    current_runs = list(run_paths)
+    round_num = 0
+
+    # Reducir runs en pasadas intermedias hasta que quepan en una sola pasada
+    while len(current_runs) > max_streams:
+        next_round_runs = []
+
+        for i in range(0, len(current_runs), max_streams):
+            batch = current_runs[i: i + max_streams]
+            temp_out = f"temp_round{round_num}_batch{i}.bin"
+            r, w = _merge_runs(batch, temp_out, page_size, sort_key_idx)
+            pages_read += r
+            pages_written += w
+            next_round_runs.append(temp_out)
+
+            # Eliminar runs del lote procesado (no eliminar los runs originales
+            # en la primera ronda, ya que generate_runs los creó; sí eliminar
+            # temporales de rondas anteriores)
+            if round_num > 0:
+                for p in batch:
+                    if os.path.exists(p):
+                        os.remove(p)
+
+        # En rondas posteriores a la primera también limpiar los runs originales
+        if round_num == 0:
+            for p in current_runs:
+                if os.path.exists(p):
+                    os.remove(p)
+
+        current_runs = next_round_runs
+        round_num += 1
+
+    # Pasada final: merge de los runs restantes hacia el archivo de salida
+    r, w = _merge_runs(current_runs, output_path, page_size, sort_key_idx)
+    pages_read += r
+    pages_written += w
+
+    # Limpiar temporales de la última ronda intermedia (si hubo más de una ronda)
+    if round_num > 0:
+        for p in current_runs:
+            if os.path.exists(p):
+                os.remove(p)
 
     return pages_read, pages_written
 
@@ -122,12 +168,12 @@ def external_sort(heap_path, output_path, page_size, buffer_size, sort_key_idx):
     """Ejecuta TPMMS y retorna métricas de rendimiento."""
     start_total = time.time()
 
-    # Fase 1
+    # Fase 1: Generación de runs
     start_p1 = time.time()
     run_paths, r1, w1 = generate_runs(heap_path, page_size, buffer_size, sort_key_idx)
     end_p1 = time.time()
 
-    # Fase 2
+    # Fase 2: Merge respetando límite de buffer
     start_p2 = time.time()
     r2, w2 = multiway_merge(run_paths, output_path, page_size, buffer_size, sort_key_idx)
     end_p2 = time.time()
